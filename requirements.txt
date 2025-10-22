@@ -1,9 +1,9 @@
-streamlit==1.29.0
+streamlit==1.32.0
 openai==1.12.0
-langchain==0.1.5
-langchain-openai==0.0.5
-langchain-community==0.0.20
-faiss-cpu==1.9.0.post1
-pandas==2.0.3
-numpy==1.24.3
+langchain==0.1.16
+langchain-openai==0.1.1
+langchain-community==0.0.38
+faiss-cpu==1.8.0
+pandas==2.2.0
+numpy==1.26.4
 python-dotenv==1.0.0
