@@ -1,0 +1,28 @@
+# Environment
+.env
+.env.local
+
+# Large files
+*.pkl
+*.csv
+*.h5
+langchain_faiss_db/
+
+# Python
+__pycache__/
+*.py[cod]
+.Python
+venv/
+env/
+
+# Jupyter
+*.ipynb
+.ipynb_checkpoints/
+Untitled*.ipynb
+
+# Folders
+film-oneri-app/
+
+# OS
+.DS_Store
+Thumbs.db
