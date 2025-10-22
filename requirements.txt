@@ -7,4 +7,4 @@ faiss-cpu
 pandas
 numpy
 python-dotenv
-openai==1.12.0
+openai
