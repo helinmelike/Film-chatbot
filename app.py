@@ -11,11 +11,12 @@ warnings.filterwarnings('ignore')
 
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.vectorstores import FAISS as LangChainFAISS
-from langchain.chains import create_history_aware_retriever, create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.messages import HumanMessage, AIMessage
-from langchain_core.documents import Document
+from langchain.chains import ConversationalRetrievalChain
+from langchain.memory import ConversationBufferMemory
+from langchain.schema import Document
+from langchain_community.docstore.in_memory import InMemoryDocstore
+from langchain_community.vectorstores.utils import DistanceStrategy
+from langchain.prompts import PromptTemplate
 from langchain_community.docstore.in_memory import InMemoryDocstore
 from langchain_community.vectorstores.utils import DistanceStrategy
 
@@ -92,7 +93,6 @@ class LangChainMovieRAG:
         )
         self.vectorstore = None
         self.chain = None
-        self.chat_history = []
         
     def create_vectorstore(self, df):
         """DataFrame'den FAISS vektör DB oluştur"""
@@ -147,6 +147,12 @@ class LangChainMovieRAG:
         if not self.vectorstore:
             raise ValueError("Önce vectorstore oluşturun!")
         
+        memory = ConversationBufferMemory(
+            memory_key="chat_history",
+            return_messages=True,
+            output_key="answer"
+        )
+        
         prompt_template = """Sen profesyonel bir film öneri asistanısın. AYNEN aşağıdaki formatı kullan!
 
 ÖNEMLİ KURALLAR:
@@ -172,36 +178,33 @@ Tek cümle açıklama.
    - Sonra boş satır
 5. Sadece 3-5 film öner, fazla detay verme
 
-Önceki sohbet geçmişi:
-{chat_history}
-
-Soru: {input}
+Soru: {question}
 
 Bulunan filmler:
 {context}
 
 Cevabın (AYNEN YUKARIDAKI FORMAT):"""
 
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", prompt_template),
-            MessagesPlaceholder(variable_name="chat_history"),
-            ("human", "{input}")
-        ])
-        
-        # Document chain oluştur
-        document_chain = create_stuff_documents_chain(self.llm, prompt)
-        
-        # Retrieval chain oluştur
-        retriever = self.vectorstore.as_retriever(
-            search_type="mmr",
-            search_kwargs={
-                "k": 10,
-                "fetch_k": 30,
-                "lambda_mult": 0.5
-            }
+        PROMPT = PromptTemplate(
+            template=prompt_template, 
+            input_variables=["context", "question"]
         )
         
-        self.chain = create_retrieval_chain(retriever, document_chain)
+        self.chain = ConversationalRetrievalChain.from_llm(
+            llm=self.llm,
+            retriever=self.vectorstore.as_retriever(
+                search_type="mmr",
+                search_kwargs={
+                    "k": 10,
+                    "fetch_k": 30,
+                    "lambda_mult": 0.5
+                }
+            ),
+            memory=memory,
+            return_source_documents=True,
+            verbose=False,
+            combine_docs_chain_kwargs={"prompt": PROMPT}
+        )
         
         return self.chain
     
@@ -209,32 +212,16 @@ Cevabın (AYNEN YUKARIDAKI FORMAT):"""
         if not self.chain:
             self.create_chain()
         
-        # Chat history'yi mesaj formatına çevir
-        chat_history_messages = []
-        for msg in self.chat_history[-6:]:  # Son 6 mesajı al
-            if msg['role'] == 'user':
-                chat_history_messages.append(HumanMessage(content=msg['content']))
-            else:
-                chat_history_messages.append(AIMessage(content=msg['content']))
+        result = self.chain.invoke({"question": question})
         
-        result = self.chain.invoke({
-            "input": question,
-            "chat_history": chat_history_messages
-        })
-        
-        # Tekrar eden filmleri temizle
         seen_titles = set()
         unique_docs = []
         
-        for doc in result.get('context', []):
+        for doc in result['source_documents']:
             title = doc.metadata.get('title', '')
             if title not in seen_titles:
                 seen_titles.add(title)
                 unique_docs.append(doc)
-        
-        # Chat history'ye ekle
-        self.chat_history.append({'role': 'user', 'content': question})
-        self.chat_history.append({'role': 'assistant', 'content': result['answer']})
         
         return {
             'answer': result['answer'],
@@ -333,7 +320,6 @@ def main():
             st.session_state.chat_history = []
             st.session_state.recommended_movies = set()
             st.session_state.conversation_count = 0
-            st.session_state.rag.chat_history = []
             st.rerun()
     
     for message in st.session_state.chat_history:

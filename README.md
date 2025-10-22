@@ -1,5 +1,7 @@
 **AI Film Öneri Sistemi - RAG Tabanlı ChatbotProje Hakkında**
 
+web site link:https://film-chatbot-j5s9ya38ry5fbbnjukw97v.streamlit.app/
+
 Bu proje, Retrieval-Augmented Generation (RAG) teknolojisi kullanarak kullanıcıların film tercihlerine göre kişiselleştirilmiş öneriler sunan yapay zeka destekli bir chatbot uygulamasıdır. Sistem, 900,000'den fazla film verisi üzerinde çalışarak doğal dil işleme ve semantik arama teknikleriyle en uygun filmleri önermektedir.Projenin AmacıBu projenin temel amaçları şunlardır:
 
 Kullanıcıların doğal dilde belirttikleri tercihlerine göre yüksek kaliteli film önerileri sunmak
