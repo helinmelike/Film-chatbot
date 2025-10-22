@@ -11,17 +11,18 @@ warnings.filterwarnings('ignore')
 
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.vectorstores import FAISS as LangChainFAISS
-from langchain.chains import ConversationalRetrievalChain
-from langchain.memory import ConversationBufferMemory
+from langchain.chains import create_retrieval_chain
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import HumanMessage, AIMessage
 from langchain.schema import Document
 from langchain_community.docstore.in_memory import InMemoryDocstore
 from langchain_community.vectorstores.utils import DistanceStrategy
-from langchain.prompts import PromptTemplate
 
 load_dotenv()
 
 st.set_page_config(
-    page_title="🎬 Film Öneri Asistanı",
+    page_title="Film Öneri Asistanı",
     page_icon="🎬",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -91,6 +92,7 @@ class LangChainMovieRAG:
         )
         self.vectorstore = None
         self.chain = None
+        self.chat_history = []
         
     def create_vectorstore(self, df):
         """DataFrame'den FAISS vektör DB oluştur"""
@@ -145,12 +147,6 @@ class LangChainMovieRAG:
         if not self.vectorstore:
             raise ValueError("Önce vectorstore oluşturun!")
         
-        memory = ConversationBufferMemory(
-            memory_key="chat_history",
-            return_messages=True,
-            output_key="answer"
-        )
-        
         prompt_template = """Sen profesyonel bir film öneri asistanısın. AYNEN aşağıdaki formatı kullan!
 
 ÖNEMLİ KURALLAR:
@@ -176,33 +172,36 @@ Tek cümle açıklama.
    - Sonra boş satır
 5. Sadece 3-5 film öner, fazla detay verme
 
-Soru: {question}
+Önceki sohbet geçmişi:
+{chat_history}
+
+Soru: {input}
 
 Bulunan filmler:
 {context}
 
 Cevabın (AYNEN YUKARIDAKI FORMAT):"""
 
-        PROMPT = PromptTemplate(
-            template=prompt_template, 
-            input_variables=["context", "question"]
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", prompt_template),
+            MessagesPlaceholder(variable_name="chat_history"),
+            ("human", "{input}")
+        ])
+        
+        # Document chain oluştur
+        document_chain = create_stuff_documents_chain(self.llm, prompt)
+        
+        # Retrieval chain oluştur
+        retriever = self.vectorstore.as_retriever(
+            search_type="mmr",
+            search_kwargs={
+                "k": 10,
+                "fetch_k": 30,
+                "lambda_mult": 0.5
+            }
         )
         
-        self.chain = ConversationalRetrievalChain.from_llm(
-            llm=self.llm,
-            retriever=self.vectorstore.as_retriever(
-                search_type="mmr",
-                search_kwargs={
-                    "k": 10,
-                    "fetch_k": 30,
-                    "lambda_mult": 0.5
-                }
-            ),
-            memory=memory,
-            return_source_documents=True,
-            verbose=False,
-            combine_docs_chain_kwargs={"prompt": PROMPT}
-        )
+        self.chain = create_retrieval_chain(retriever, document_chain)
         
         return self.chain
     
@@ -210,16 +209,32 @@ Cevabın (AYNEN YUKARIDAKI FORMAT):"""
         if not self.chain:
             self.create_chain()
         
-        result = self.chain.invoke({"question": question})
+        # Chat history'yi mesaj formatına çevir
+        chat_history_messages = []
+        for msg in self.chat_history[-6:]:  # Son 6 mesajı al
+            if msg['role'] == 'user':
+                chat_history_messages.append(HumanMessage(content=msg['content']))
+            else:
+                chat_history_messages.append(AIMessage(content=msg['content']))
         
+        result = self.chain.invoke({
+            "input": question,
+            "chat_history": chat_history_messages
+        })
+        
+        # Tekrar eden filmleri temizle
         seen_titles = set()
         unique_docs = []
         
-        for doc in result['source_documents']:
+        for doc in result.get('context', []):
             title = doc.metadata.get('title', '')
             if title not in seen_titles:
                 seen_titles.add(title)
                 unique_docs.append(doc)
+        
+        # Chat history'ye ekle
+        self.chat_history.append({'role': 'user', 'content': question})
+        self.chat_history.append({'role': 'assistant', 'content': result['answer']})
         
         return {
             'answer': result['answer'],
@@ -231,7 +246,7 @@ def initialize_rag():
     api_key = os.getenv('OPENAI_API_KEY')
     
     if not api_key:
-        st.error(" OpenAI API Key bulunamadı!")
+        st.error("OpenAI API Key bulunamadı!")
         st.stop()
     
     rag = LangChainMovieRAG(api_key)
@@ -240,17 +255,17 @@ def initialize_rag():
         if os.path.exists('langchain_faiss_db'):
             rag.load_vectorstore('langchain_faiss_db')
         else:
-            st.warning(" FAISS veritabanı bulunamadı!")
+            st.warning("FAISS veritabanı bulunamadı!")
             st.stop()
         
         rag.create_chain()
         return rag
     except Exception as e:
-        st.error(f" Sistem başlatılamadı: {e}")
+        st.error(f"Sistem başlatılamadı: {e}")
         st.stop()
 
 def main():
-    st.markdown('<h1 class="main-header">🎬 AI Film Öneri Asistanı</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">AI Film Öneri Asistanı</h1>', unsafe_allow_html=True)
     
     if 'chat_history' not in st.session_state:
         st.session_state.chat_history = []
@@ -259,16 +274,16 @@ def main():
     if 'conversation_count' not in st.session_state:
         st.session_state.conversation_count = 0
     if 'rag' not in st.session_state:
-        with st.spinner(" Sistem başlatılıyor..."):
+        with st.spinner("Sistem başlatılıyor..."):
             st.session_state.rag = initialize_rag()
-            st.success(" Sistem hazır! 45,000+ film veritabanı yüklendi!")
+            st.success("Sistem hazır! 45,000+ film veritabanı yüklendi!")
     
     with st.sidebar:
-        st.header(" Sistem Bilgileri")
+        st.header("Sistem Bilgileri")
         
         st.markdown("""
         <div style='background-color: #E8F5E9; padding: 1rem; border-radius: 10px;'>
-        <h4>🔧 Teknolojiler</h4>
+        <h4>Teknolojiler</h4>
         <span class='tech-badge'>GPT-4o-mini</span>
         <span class='tech-badge'>FAISS</span>
         <span class='tech-badge'>LangChain</span>
@@ -277,7 +292,7 @@ def main():
         """, unsafe_allow_html=True)
         
         st.markdown("---")
-        st.subheader(" İstatistikler")
+        st.subheader("İstatistikler")
         
         col1, col2 = st.columns(2)
         with col1:
@@ -297,7 +312,7 @@ def main():
             """, unsafe_allow_html=True)
         
         st.markdown("---")
-        st.subheader(" Örnek Sorular")
+        st.subheader("Örnek Sorular")
         
         example_questions = [
             "Komik bir aksiyon filmi öner",
@@ -309,28 +324,29 @@ def main():
         ]
         
         for question in example_questions:
-            if st.button(f" {question}", key=f"ex_{question}", use_container_width=True):
+            if st.button(f"{question}", key=f"ex_{question}", use_container_width=True):
                 st.session_state.pending_question = question
                 st.rerun()
         
         st.markdown("---")
-        if st.button(" Sohbeti Temizle", use_container_width=True, type="primary"):
+        if st.button("Sohbeti Temizle", use_container_width=True, type="primary"):
             st.session_state.chat_history = []
             st.session_state.recommended_movies = set()
             st.session_state.conversation_count = 0
+            st.session_state.rag.chat_history = []
             st.rerun()
     
     for message in st.session_state.chat_history:
         if message['role'] == 'user':
             st.markdown(f"""
             <div class='chat-message user-message'>
-                <strong> Siz:</strong><br>{message['content']}
+                <strong>Siz:</strong><br>{message['content']}
             </div>
             """, unsafe_allow_html=True)
         else:
             st.markdown(f"""
             <div class='chat-message assistant-message'>
-                <strong> AI Asistanı:</strong><br>{message['content']}
+                <strong>AI Asistanı:</strong><br>{message['content']}
             </div>
             """, unsafe_allow_html=True)
     
@@ -346,7 +362,7 @@ def main():
             'content': user_input
         })
         
-        with st.spinner(" Düşünüyorum..."):
+        with st.spinner("Düşünüyorum..."):
             try:
                 result = st.session_state.rag.query(user_input)
                 
@@ -372,7 +388,7 @@ def main():
                 st.rerun()
                 
             except Exception as e:
-                st.error(f" Hata: {e}")
+                st.error(f"Hata: {e}")
 
 if __name__ == "__main__":
     main()
